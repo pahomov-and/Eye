@@ -19,7 +19,6 @@ static void emptyCall(Request *request) {
     exit(EXIT_FAILURE);
 }
 
-EventLoop Eye::eventLoop_;
 void (*Eye::processRequest)(libcamera::Request *) = emptyCall;
 
 /*
@@ -234,7 +233,7 @@ int Eye::CreateRequests() {
     return EXIT_SUCCESS;
 }
 
-void Eye::requestComplete(Request *request) {
+void Eye::RequestCompleted(void (*processRequest)(libcamera::Request *), Request *request) {
     if (request->status() == Request::RequestCancelled)
         return;
 

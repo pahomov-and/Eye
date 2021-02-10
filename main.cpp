@@ -16,13 +16,36 @@ std::vector<const Stream *> streams;
 std::map<libcamera::FrameBuffer *, MappedBuffer> mappedBuffers;
 Rectangle sensor_area;
 
-cv::Mat dst, dst_bayer, dst_rgb;
+cv::Mat dst, dst_yuv, dst_rgb;
 
 double zoom = 1;
 
 #define CHECK(ret) assert((ret) == 0)
 
 std::map<int, uint64_t> lastBufferTime;
+
+std::string type2str(int type) {
+    std::string r;
+
+    uchar depth = type & CV_MAT_DEPTH_MASK;
+    uchar chans = 1 + (type >> CV_CN_SHIFT);
+
+    switch ( depth ) {
+        case CV_8U:  r = "8U"; break;
+        case CV_8S:  r = "8S"; break;
+        case CV_16U: r = "16U"; break;
+        case CV_16S: r = "16S"; break;
+        case CV_32S: r = "32S"; break;
+        case CV_32F: r = "32F"; break;
+        case CV_64F: r = "64F"; break;
+        default:     r = "User"; break;
+    }
+
+    r += "C";
+    r += (chans+'0');
+
+    return r;
+}
 
 void processInfo(int idStream, FrameBuffer *buffer)
 {
@@ -38,7 +61,8 @@ void processInfo(int idStream, FrameBuffer *buffer)
         lastBufferTime[idStream] = metadata.timestamp;
 
         std::cout
-                << "seq: " << metadata.sequence
+                << "idStream: " << idStream
+                << "\tseq: " << metadata.sequence
                 << "\tbytesused:" << metadata.planes[0].bytesused
                 << "\ttimestamp:" << metadata.timestamp
                 << "\tfps:" << fps << "\n";
@@ -49,7 +73,7 @@ void processInfo(int idStream, FrameBuffer *buffer)
 
 }
 
-static void processRequest(Request *request) {
+void processRequest(Request *request) {
     if (request->status() == Request::RequestCancelled)
         return;
 
@@ -64,7 +88,7 @@ static void processRequest(Request *request) {
 
         FrameBuffer *buffer = request->buffers().at(streams.at(0));
         std::memcpy(dst.data, (uchar *) mappedBuffers[buffer].memory, mappedBuffers[buffer].size);
-        cv::imshow("test", dst);
+//        cv::imshow("test", dst);
 
         int x0 = sensor_area.center().x;
         int y0 = sensor_area.center().y;
@@ -82,7 +106,7 @@ static void processRequest(Request *request) {
         double real_zoom = sqrt((sensor_area.width * sensor_area.height) / (w * h));
 
         zoom += 0.1;
-        if (zoom > 20) zoom = 1.0;
+        if (zoom > 10) zoom = 1.0;
 
         processInfo(0, buffer);
     }
@@ -92,10 +116,10 @@ static void processRequest(Request *request) {
         if (request->buffers().count(streams.at(1))) {
             FrameBuffer *buffer = request->buffers().at(streams.at(1));
 
-//            dst_bayer.data = (uchar *) mappedBuffers[buffer].memory;
-            std::memcpy(dst_bayer.data, (uchar *) mappedBuffers[buffer].memory, mappedBuffers[buffer].size);
-            cv::cvtColor(dst_bayer, dst_rgb, cv::COLOR_BayerBG2BGR);
-            cv::imshow("test1", dst_rgb);
+//            dst_yuv.data = (uchar *) mappedBuffers[buffer].memory;
+            std::memcpy(dst_yuv.data, (uchar *) mappedBuffers[buffer].memory, mappedBuffers[buffer].size);
+            cv::cvtColor(dst_yuv, dst_rgb, cv::COLOR_YUV2BGR_NV12);
+//            cv::imshow("test1", dst_rgb);
 
             crop.x = 0;
             crop.y = 0;
@@ -109,12 +133,26 @@ static void processRequest(Request *request) {
 
     crop.translateBy(sensor_area.topLeft());
     request->controls().set(libcamera::controls::ScalerCrop, crop);
-    request->controls().set(libcamera::controls::ExposureTime, 50000);
+    request->controls().set(libcamera::controls::ExposureTime, 30000);
     request->controls().set(libcamera::controls::AnalogueGain, 10.0);
     request->controls().set(libcamera::controls::Sharpness, 0);
 
     eye.AddRequest(request);
 
+    /**
+    std::string dst_ty =  type2str( dst.type() );
+    printf("Matrix: %s %dx%d \n", dst_ty.c_str(), dst.cols, dst.rows );
+
+    std::string dst_rgb_ty =  type2str( dst.type() );
+    printf("Matrix: %s %dx%d \n", dst_rgb_ty.c_str(), dst_rgb.cols, dst_rgb.rows );
+    */
+
+    if (dst_rgb.cols > 0 && dst_rgb.rows > 0 ) {
+        cv::Rect roi( cv::Point( 0, 0 ), dst_rgb.size() );
+        dst_rgb.copyTo( dst( roi ) );
+
+    }
+    cv::imshow("test_all", dst);
     cv::waitKey(1);
 }
 
@@ -124,15 +162,19 @@ int main() {
     CHECK(eye.Init());
     eye.ShowCamers();
     CHECK(eye.SetCameraId(0, idSensor));
-    CHECK(eye.CameraConfiguration({ StreamRole::Raw, StreamRole::Viewfinder }));
+//    CHECK(eye.CameraConfiguration({ StreamRole::Viewfinder, StreamRole::Raw }));
+    CHECK(eye.CameraConfiguration({ StreamRole::Viewfinder, StreamRole::StillCapture }));
 //    CHECK(eye.CameraConfiguration({ StreamRole::Viewfinder}));
 
-    CHECK(eye.SetConfiguration(0, {800, 600}, PixelFormat::fromString("RGB888")));
-    CHECK(eye.SetConfiguration(1, {800, 600}));
+    CHECK(eye.SetConfiguration(0, {1280, 720}, PixelFormat::fromString("RGB888")));
+    CHECK(eye.SetConfiguration(1, {320, 240}, PixelFormat::fromString("RGB888")));
     CHECK(eye.StreamConfiguration());
     CHECK(eye.BufferAlloc());
     CHECK(eye.CreateRequests());
-    eye.SetCallBack(processRequest);
+    eye.SetCallBack([](Request *request){
+        eye.RequestCompleted(processRequest, request);
+    });
+
 
     sensor_area = eye.GetSensorArea();
     streams = eye.GetStreams();
@@ -144,9 +186,9 @@ int main() {
             eye.GetStreamConfiguration(0).size.width, CV_8UC3
             );
     if (streams.size() > 1)
-        dst_bayer = cv::Mat(
-                eye.GetStreamConfiguration(1).size.height,
-                eye.GetStreamConfiguration(1).size.width, CV_8UC1
+        dst_yuv = cv::Mat(
+                eye.GetStreamConfiguration(1).size.height*3/2,
+                eye.GetStreamConfiguration(1).size.width, CV_8UC1 //CV_8UC1
                 );
 
     ControlList controlList;

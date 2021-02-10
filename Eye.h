@@ -122,9 +122,10 @@ public:
 
     static void (*processRequest)(libcamera::Request *);
 
+    void RequestCompleted(void (*processRequest)(libcamera::Request *), libcamera::Request *request);
 private:
     std::shared_ptr<libcamera::Camera> camera_;
-    static EventLoop eventLoop_;
+    EventLoop eventLoop_;
 
     libcamera::FrameBufferAllocator *allocator_;
     std::map<libcamera::FrameBuffer *, MappedBuffer> mappedBuffers_;
@@ -143,8 +144,6 @@ private:
 
     double zoom_;
     int countStreams_;
-
-    static void requestComplete(libcamera::Request *request);
 
 };
 
